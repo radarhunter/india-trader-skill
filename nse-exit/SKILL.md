@@ -75,7 +75,7 @@ Refusals: stop >= entry; target <= entry; stop closer than
   of it. /nse-alerts rings at that time.
 - **Stop orders.** On NSE a stop is placed as SL (with a limit) or SL-M
   (market on trigger). SL-M is not allowed on many stocks by most brokers
-  for cash equity; the pack writes an SL order with a limit a few ticks
+  for cash equity; the pack writes an SL order with a limit at least 0.4%
   below the trigger. Across a circuit halt no stop fills at all.
 - **Gaps.** Indian stocks gap on results and global cues at the 09:15 open.
   A swing stop does not protect against the gap; size the position so a

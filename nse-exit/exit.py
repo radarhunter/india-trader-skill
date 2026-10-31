@@ -3,7 +3,7 @@
 
 Reads the entry from trader/entry.json (or --entry PRICE), puts the stop at
 the opening-range midpoint by default (or --stop or-low | PRICE | 1.5% |
-1.5atr), rounds it DOWN to the Rs 0.05 tick, sets the target at 2R (or
+1.5atr), rounds it DOWN to the NSE tick for that price band, sets the target at 2R (or
 --target 1R | PRICE | 3%), rounds it DOWN too, and refuses a plan that makes
 no sense: stop at or above the entry, target at or below it, a stop so tight
 the spread eats it, or a reward:risk under the config minimum. Writes

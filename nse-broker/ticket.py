@@ -8,7 +8,7 @@
   place --yes WORD  Send it. Paper: a simulated fill at the limit, logged to
                     trader/trades_log.json and trader/holdings.json. Live:
                     the broker API, keys from environment variables only.
-  close SYMBOL      Build (and with --yes send) the SELL that flattens it.
+  close SYMBOL      Write the SELL that flattens it (then /nse-risk, then place --yes).
   fill ORDER_ID --price P [--qty Q]   Record a real fill the broker reported.
   status            Open positions, today's trades, today's P&L.
 
@@ -43,24 +43,14 @@ import nse_common as nc  # noqa: E402
 PASS_TTL_MIN = 20
 
 
-def log_path():
-    return nc.trader_dir() / "trades_log.json"
-
-
-def load_log():
-    return nc.read_json(log_path(), {"trades": []}) or {"trades": []}
+log_path = nc.log_path
+load_log = nc.load_log
+holdings_path = nc.holdings_path
+load_holdings = nc.load_holdings
 
 
 def save_log(doc):
-    nc.write_json(log_path(), doc)
-
-
-def holdings_path(cfg):
-    return Path(cfg.get("holdings_file", "trader/holdings.json"))
-
-
-def load_holdings(cfg):
-    return nc.read_json(holdings_path(cfg), {"positions": []}) or {"positions": []}
+    nc.write_json(nc.log_path(), doc)
 
 
 def passed_orders(cfg, a):
@@ -72,7 +62,8 @@ def passed_orders(cfg, a):
     if checked:
         try:
             t = dt.datetime.strptime(checked.replace(" IST", ""), "%Y-%m-%d %H:%M").replace(tzinfo=nc.IST)
-            fresh = (nc.now_ist() - t).total_seconds() <= PASS_TTL_MIN * 60
+            age = (nc.now_ist() - t).total_seconds()
+            fresh = 0 <= age <= PASS_TTL_MIN * 60
         except ValueError:
             fresh = False
     out = []
@@ -171,6 +162,8 @@ def show_ticket(o, cfg):
     for r in o.get("risk_reasons") or []:
         print("  BLOCK: " + r)
     broker = cfg.get("broker", "paper")
+    if live and broker in ("upstox", "groww") and br.get("stop_trigger"):
+        print("  NOTE: on %s the stop-loss and target legs are placed AFTER the entry fills (no native bracket); until then the position has no stop." % broker)
     if broker in PAYLOADS:
         print("  %s payload:" % broker)
         print("  " + json.dumps(PAYLOADS[broker](o), indent=2).replace("\n", "\n  "))
@@ -218,7 +211,13 @@ def live_angelone(o):
         raise nc.DataError("Angel One login failed: %s" % login.get("message"))
     jwt = login["data"]["jwtToken"]
     # symbol token from the scrip master
-    master = json.loads(nc.http_get("https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json", timeout=60))
+    cache = nc.trader_dir() / "angel_scrip_master.json"
+    if cache.exists() and (time.time() - cache.stat().st_mtime) < 86400:
+        master = json.loads(cache.read_text(encoding="utf-8"))
+    else:
+        text = nc.http_get("https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json", timeout=120)
+        master = json.loads(text)
+        cache.write_text(text, encoding="utf-8")
     tok = next((r["token"] for r in master if r.get("symbol") == "%s-EQ" % o["symbol"] and r.get("exch_seg") == "NSE"), None)
     if not tok:
         raise nc.DataError("Angel One: no symbol token for %s-EQ" % o["symbol"])
@@ -321,11 +320,43 @@ def cmd_place(a):
     t = nc.now_ist()
     sent = 0
     for o in orders:
+        side = (o.get("side") or "BUY").upper()
         rec = {"order_id": o["order_id"], "date": t.date().isoformat(), "time": t.strftime("%H:%M:%S"),
-               "symbol": o["symbol"], "side": o.get("side", "BUY"), "qty": int(o["qty"]), "price": float(o["price"]),
+               "symbol": o["symbol"], "side": side, "qty": int(o["qty"]), "price": float(o["price"]),
                "product": o.get("product", "MIS"), "bracket": o.get("bracket"), "loss_at_stop_inr": o.get("loss_at_stop_inr"),
                "paper": not live, "broker": broker if live else "paper", "yes": a.yes, "status": "placed",
                "flat_by": o.get("flat_by"), "horizon": o.get("horizon")}
+        pos = next((p for p in hold.get("positions", []) if p["symbol"].upper() == o["symbol"].upper()), None)
+        if side == "SELL":
+            if not pos:
+                print("%s: NOT sent - no position held to close (short sales are not supported here)." % o["symbol"])
+                continue
+            rec["closes"] = pos.get("order_id")
+            rec["qty"] = min(int(o["qty"]), int(pos["qty"]))
+            if live:
+                try:
+                    res = LIVE[broker](o)
+                except nc.DataError as e:
+                    print("%s: NOT sent - %s" % (o["symbol"], e))
+                    rec.update({"status": "rejected", "error": str(e)})
+                    log["trades"].append(rec)
+                    continue
+                rec["broker_order_ids"] = res.get("order_ids")
+                print("%s: SELL sent to %s, order id(s) %s. Record the fill with `fill %s --price P`." % (
+                    o["symbol"], broker, res.get("order_ids"), o["order_id"]))
+                log["trades"].append(rec)
+            else:
+                save_log(log)
+                nc.write_json(holdings_path(cfg), hold)
+                pnl = nc.paper_close(cfg, o["symbol"], float(o["price"]), "close order", rec["qty"])
+                log = load_log()
+                hold = load_holdings(cfg)
+                print("%s: PAPER closed %d shares at %s, P&L %s." % (o["symbol"], rec["qty"], nc.inr(float(o["price"])), nc.inr(pnl)))
+            sent += 1
+            continue
+        if pos and not live:
+            print("%s: NOT filled - a paper position is already open in it (close it first)." % o["symbol"])
+            continue
         if live:
             try:
                 res = LIVE[broker](o)
@@ -340,7 +371,7 @@ def cmd_place(a):
             print("%s: sent to %s, order id(s) %s. Record the fill with `fill %s --price P` when the broker reports it." % (
                 o["symbol"], broker, res.get("order_ids"), o["order_id"]))
             if rec.get("pending_legs"):
-                print("  The stop-loss and target legs are NOT placed yet on %s; place them right after the fill (see SKILL.md)." % broker)
+                print("  WARNING: the stop-loss and target legs are NOT placed yet on %s; place them right after the fill (see SKILL.md). Until then there is no stop." % broker)
         else:
             rec["status"] = "open"
             rec["fill_price"] = float(o["price"])
@@ -349,7 +380,7 @@ def cmd_place(a):
                 "symbol": o["symbol"], "qty": int(o["qty"]), "avg_price": float(o["price"]), "product": o.get("product", "MIS"),
                 "stop": (o.get("bracket") or {}).get("stop_trigger"), "target": (o.get("bracket") or {}).get("target"),
                 "entered": t.strftime("%Y-%m-%d %H:%M"), "paper": True, "order_id": o["order_id"], "horizon": o.get("horizon")}]
-            print("%s: PAPER fill, %d shares at %s. Stop %s, target %s. Logged." % (
+            print("%s: PAPER fill, %d shares at %s. Stop %s, target %s. Logged. (Paper stops and targets are booked by `/nse-picks exits` or `/nse-alerts watch`.)" % (
                 o["symbol"], int(o["qty"]), nc.inr(float(o["price"])), nc.inr((o.get("bracket") or {}).get("stop_trigger")),
                 nc.inr((o.get("bracket") or {}).get("target"))))
         log["trades"].append(rec)
@@ -366,6 +397,7 @@ def cmd_place(a):
 
 
 def cmd_close(a):
+    """Write the SELL that flattens a position to trader/orders.json. It is sent only by `place --yes` after /nse-risk."""
     cfg = nc.load_config(strict=True)
     hold = load_holdings(cfg)
     sym = a.symbol.upper()
@@ -373,51 +405,32 @@ def cmd_close(a):
     if not pos:
         print("No open position in %s." % sym)
         return 1
+    last = None
     try:
-        q = nc.yahoo_quote_fast(sym)
-        last = q["last"]
+        last = nc.yahoo_quote_fast(sym)["last"]
     except nc.DataError:
-        last = pos.get("avg_price")
-    price = a.price or nc.tick_round(float(last) * 0.998, down=True)
+        pass
+    if a.price:
+        price = float(a.price)
+    elif last:
+        price = nc.tick_round(float(last) * 0.998, down=True)
+    elif pos.get("avg_price"):
+        price = nc.tick_round(float(pos["avg_price"]), down=True)
+        print("No live quote; using the average price as the limit. Pass --price to set it.")
+    else:
+        print("No live quote and no avg_price on the position; pass --price.")
+        return 1
+    qty = min(int(a.qty or pos["qty"]), int(pos["qty"]))
     order = {"symbol": sym, "exchange": cfg.get("exchange", "NSE"), "side": "SELL", "product": pos.get("product", "MIS"),
-             "qty": int(a.qty or pos["qty"]), "order_type": "LIMIT", "price": price, "closes_position": True, "bracket": {},
-             "tag": "nse-skill-close"}
+             "qty": qty, "order_type": "LIMIT", "price": price, "closes_position": True, "bracket": {},
+             "tag": "nse-skill-close", "horizon": pos.get("horizon")}
     order["order_id"] = order_id(order)
     t = nc.now_ist()
-    print("CLOSE %s: SELL %d x %s at a %s limit (last %s, avg %s, P&L %s)" % (
-        sym, order["qty"], sym, nc.inr(price), nc.inr(last), nc.inr(pos.get("avg_price")),
-        nc.inr((price - float(pos.get("avg_price", price))) * order["qty"])))
-    if not a.yes:
-        nc.write_json(nc.trader_dir() / "orders.json", {"as_of": t.strftime("%Y-%m-%d %H:%M IST"), "orders": [order]})
-        print("Written to trader/orders.json. Run /nse-risk (a close is never blocked by the day limit), then say yes.")
-        return 0
-    live = not cfg.get("paper", True)
-    log = load_log()
-    rec = {"order_id": order["order_id"], "date": t.date().isoformat(), "time": t.strftime("%H:%M:%S"), "symbol": sym,
-           "side": "SELL", "qty": order["qty"], "price": price, "product": order["product"], "paper": not live,
-           "broker": cfg.get("broker") if live else "paper", "yes": a.yes, "status": "placed", "closes": pos.get("order_id")}
-    if live:
-        try:
-            res = LIVE[cfg.get("broker", "paper")](order)
-            rec["broker_order_ids"] = res.get("order_ids")
-            print("Sent to %s: %s. Record the fill with `fill`." % (cfg.get("broker"), res.get("order_ids")))
-        except nc.DataError as e:
-            print("NOT sent - %s" % e)
-            return 1
-    else:
-        pnl = (price - float(pos.get("avg_price", price))) * order["qty"]
-        rec.update({"status": "closed", "fill_price": price, "pnl": round(pnl, 2)})
-        for r in log["trades"]:
-            if r.get("order_id") == pos.get("order_id") and r.get("status") == "open":
-                r["status"] = "closed"
-                r["pnl"] = round(pnl, 2)
-                r["exit_price"] = price
-                r["exit_time"] = t.strftime("%H:%M:%S")
-        hold["positions"] = [p for p in hold.get("positions", []) if p["symbol"].upper() != sym]
-        nc.write_json(holdings_path(cfg), hold)
-        print("PAPER closed %s at %s, P&L %s." % (sym, nc.inr(price), nc.inr(pnl)))
-    log["trades"].append(rec)
-    save_log(log)
+    avg = float(pos.get("avg_price") or price)
+    print("CLOSE %s: SELL %d x %s at a %s limit (last %s, avg %s, P&L about %s)" % (
+        sym, qty, sym, nc.inr(price), nc.inr(last), nc.inr(avg), nc.inr((price - avg) * qty)))
+    nc.write_json(nc.trader_dir() / "orders.json", {"as_of": t.strftime("%Y-%m-%d %H:%M IST"), "orders": [order]})
+    print("Written to trader/orders.json. Next: /nse-risk (a close is never blocked by the day limit), then say yes and `place --yes`.")
     return 0
 
 
@@ -483,7 +496,6 @@ def main(argv=None):
     c.add_argument("symbol")
     c.add_argument("--qty", type=int)
     c.add_argument("--price", type=float)
-    c.add_argument("--yes")
     f = sub.add_parser("fill")
     f.add_argument("order_id")
     f.add_argument("--price", type=float, required=True)

@@ -20,14 +20,7 @@ list for whatever you hold.
 
 ## Install
 
-**Method A - in Claude Code, paste and send:**
-
-```
-https://github.com/<you>/india-trader-skill
-install skill
-```
-
-**Method B - as a plugin:**
+**Method A - as a plugin (recommended):**
 
 ```
 /plugin marketplace add <you>/india-trader-skill
@@ -35,7 +28,7 @@ install skill
 ```
 (skills then carry a prefix: `/india-trader-skill:nse-scanner`)
 
-**Method C - clone and copy:**
+**Method B - clone and copy:**
 
 ```bash
 mkdir -p ~/.claude/skills
@@ -44,11 +37,16 @@ cp -r india-trader-skill/nse-* ~/.claude/skills/
 ```
 `nse-common/` must be copied along with the skills; every tool imports it.
 
-**Method D - one project only:** copy the same `nse-*` folders into
+**Method C - one project only:** copy the same `nse-*` folders into
 `.claude/skills/` inside your project.
 
-Needs Python 3.8+ (`python3 --version`). Nothing to `pip install`. No
-signup, no API key - until you connect a broker, and even then paper first.
+Replace `<you>` with the GitHub owner (this repo: `radarhunter`).
+
+Needs Python 3.8+ (`python3 --version`); on Python 3.8 or a machine without
+tzdata the tools fall back to a fixed +05:30 offset, which is correct for
+India. Nothing to `pip install`. No signup, no API key - until you connect a
+broker, and even then paper first. Desktop notifications work on macOS and
+Linux; on Windows the alert prints and beeps in the terminal.
 
 ## Ten minutes to the first paper trade
 
@@ -67,9 +65,14 @@ Next morning:
 /nse-budget size                          # how many shares, charges counted
 /nse-risk                                 # PASS or BLOCK, with reasons
 /nse-broker ticket                        # the plain ticket; say yes; paper fill
-/nse-alerts plan && /nse-alerts watch     # rings on the stop, the target, 15:10
+/nse-alerts plan && /nse-alerts watch     # rings on the stop, the target, 15:10 (books paper stops/targets)
 /nse-picks exits --watch                  # same-day "get out" alerts on every holding
+/nse-broker close RELIANCE                # writes the SELL -> /nse-risk -> say yes -> place
 ```
+
+Rehearsing when the market is shut: set `TRADER_NOW="2026-11-03 10:20"` in
+the environment to pin every tool's clock, and pass `--allow-closed` to
+/nse-risk.
 
 ## The twelve
 
@@ -78,7 +81,7 @@ Next morning:
 | `/nse-scanner` | Chart Scanner: universe, daily setups, opening-range breakouts | Nifty 500 + F&O from NSE's lists; ASM/GSM tagged and skipped; 09:15-09:30 range; IST |
 | `/nse-news` | News Monitor: headlines, NSE corporate announcements, board meetings | SEBI LODR Reg. 30 filings tagged (results, order, pledge, QIP, rating, regulatory, halt...) |
 | `/nse-entry` | Entry Timer: first 5-min close above the range or a level | never fires on a forming bar; entry window from config |
-| `/nse-exit` | Exit Planner: stop and target before the entry | Rs 0.05 tick rounding; flat by 15:10 ahead of MIS square-off; swing mode (CNC) |
+| `/nse-exit` | Exit Planner: stop and target before the entry | NSE price-band tick rounding; flat by 15:10 ahead of MIS square-off; swing mode (CNC) |
 | `/nse-timemachine` | 10,000 replays from the stock's own 5-minute bars + every past session the rule fired | time-of-day aware; swing mode counts gap-opens through the stop |
 | `/nse-budget` | Budget Manager: shares that fit four limits; one bracket order | STT, stamp duty, exchange, SEBI, brokerage, GST on the round trip; "set my rules" |
 | `/nse-risk` | Risk Manager: PASS / BLOCK on every order | NSE live `upperCP` circuit distance, ASM/GSM, results-day block, daily loss, trades a day, window, market open |
@@ -128,8 +131,12 @@ Python.
 
 ## Safety, in one place
 
-- No skill places an order except `/nse-broker`, and only with a fresh
-  `/nse-risk` PASS, the user's typed yes, and Claude's own Allow once card.
+- No skill places an order except `/nse-broker place`, and only with a
+  fresh `/nse-risk` PASS (checked within 20 minutes, never future-dated),
+  the user's typed yes, and Claude's own Allow once card. A close goes
+  through the same gate; a SELL without a held position is refused.
+- Paper positions are closed by the same path, or booked automatically at
+  the stop or target by `/nse-alerts watch` and `/nse-picks exits`.
 - `"paper": true` ships in the config. Live needs `--live` in so many words.
 - Broker keys live in environment variables, never in the chat or in files.
 - A stop is a plan, not a promise: gaps, circuits and fast markets fill

@@ -41,7 +41,7 @@ first, and stay on paper until you have watched it work for weeks.
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/ticket.py" ticket                         # show what passed, with the broker payload
 python3 "${CLAUDE_SKILL_DIR}/ticket.py" place --yes "yes, place it"    # only after the user typed that
-python3 "${CLAUDE_SKILL_DIR}/ticket.py" close RELIANCE                 # write the flattening SELL (then /nse-risk, then yes)
+python3 "${CLAUDE_SKILL_DIR}/ticket.py" close RELIANCE                 # write the flattening SELL (then /nse-risk, then place --yes)
 python3 "${CLAUDE_SKILL_DIR}/ticket.py" close RELIANCE --yes "yes"     # send it
 python3 "${CLAUDE_SKILL_DIR}/ticket.py" fill 3f9a1c2b7d4e --price 2986.10
 python3 "${CLAUDE_SKILL_DIR}/ticket.py" status
@@ -51,11 +51,17 @@ python3 "${CLAUDE_SKILL_DIR}/ticket.py" status
 
 `/nse-budget size` writes the order; `/nse-risk` writes the verdict;
 `ticket` shows it in plain words; the user says yes; `place --yes "..."`
-sends it (paper: an instant simulated fill at the limit). After a real fill,
-`fill ORDER_ID --price P` records the price the broker reported so the
-position, the stop and the P&L are right. `close SYMBOL` writes the SELL;
-run /nse-risk on it (a close is never blocked by the daily limit), get the
-yes, send.
+sends it (paper: an instant simulated fill at the limit; a paper buy in a
+symbol already held is refused). After a real fill, `fill ORDER_ID --price
+P` records the price the broker reported so the position, the stop and the
+P&L are right. `close SYMBOL` only *writes* the SELL to `trader/orders.json`;
+run /nse-risk on it (a close is never blocked by the daily limit, and a SELL
+larger than the position or with no position is BLOCKed), get the yes, then
+`place --yes` sends it - the same three locks as a buy, no shortcut.
+
+On paper, a stop or target that prints during `/nse-alerts watch` or
+`/nse-picks exits` is booked at that level automatically, so the daily loss
+tally in /nse-risk is real.
 
 Before `flat_by` (15:10 IST default), /nse-alerts rings; the user decides;
 `close` flattens. Brokers auto-square MIS around 15:15-15:20 with a charge
@@ -100,8 +106,14 @@ user cap daily order count and value from their dashboards.
 - **Products.** MIS = intraday, auto-squared by the broker; CNC = delivery,
   needs full cash, settles T+1. The ticket names the product.
 - **Stop orders.** An SL order on NSE needs a trigger and a limit; the pack
-  writes the limit three ticks under the trigger so it fills in a fast
-  move. SL-M (market) is not accepted on many cash stocks.
+  writes the limit at least three ticks and at least 0.4% under the trigger
+  so it fills in a fast move. SL-M (market) is not accepted on many cash
+  stocks. Across a gap or a circuit no SL fills; size for that.
+- **Upstox / Groww legs.** Neither has a native equity bracket; the entry
+  goes first and the SL and target legs are returned as `pending_legs` to
+  place right after the fill. The ticket says so in capitals. Upstox's
+  order API has moved between v2 and v3 in 2025; check the payload against
+  the current docs before the first live order.
 - **Circuits.** A stock at its upper circuit has no sellers; at the lower,
   no buyers. A stop does not fill through a circuit. /nse-risk checks the
   distance before the entry.

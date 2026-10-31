@@ -59,7 +59,10 @@ Flags: `--limit N`, `--min-price 50`, `--pause 0.4`, `--drawdown 2`
 3. `/nse-picks tomorrow` after 16:00 IST. Read out the two lists and the
    exit list with the reasons. For anything the user wants to pursue:
 4. `/nse-timemachine SYMBOL --swing --entry --stop --target` with the
-   levels printed, then `/nse-budget size` and `/nse-risk`.
+   levels printed, then `/nse-exit SYMBOL --entry --swing`, `/nse-budget
+   size` and `/nse-risk`. A swing (CNC) order checked after the close
+   passes with a warning that it will go as an after-market order; an
+   intraday (MIS) one is blocked until the window opens.
 5. Next morning 09:35: `/nse-scanner orb --watchlist` on the intraday
    names, `/nse-entry` on the one that fires, and so on.
 6. All day: `/nse-picks exits --watch` (or `/nse-alerts holdings` +

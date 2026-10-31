@@ -24,7 +24,6 @@ import io
 import json
 import sys
 import time
-import urllib.parse
 from pathlib import Path
 
 _here = Path(__file__).resolve().parent
@@ -42,7 +41,7 @@ def seen_path():
 def my_symbols():
     cfg = nc.load_config()
     syms = set()
-    for p in (nc.read_json(cfg.get("holdings_file", "trader/holdings.json"), {}) or {}).get("positions") or []:
+    for p in nc.load_holdings(cfg).get("positions") or []:
         syms.add(p["symbol"].upper())
     for h in (nc.read_json(nc.trader_dir() / "watchlist.json", {}) or {}).get("hits") or []:
         syms.add(h["symbol"].upper())
@@ -214,7 +213,8 @@ def cmd_insider(a):
     doc = {"as_of": nc.now_ist().strftime("%Y-%m-%d %H:%M IST"), "days": a.days, "rows": rows, "new": len(new)}
     nc.write_json(nc.ensure_trader_dir() / "insider.json", doc)
     if not a.all:
-        nc.write_json(seen_path(), {"ids": sorted(seen | {r["id"] for r in rows})[-5000:]})
+        old = (nc.read_json(seen_path(), {}) or {}).get("ids", [])
+        nc.write_json(seen_path(), {"ids": (old + [r["id"] for r in rows if r["id"] not in seen])[-5000:]})
     show = rows if a.all else new
     if a.json:
         print(json.dumps(doc, indent=2, ensure_ascii=False))

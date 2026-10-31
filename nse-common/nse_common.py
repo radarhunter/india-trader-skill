@@ -33,8 +33,25 @@ from pathlib import Path
 
 try:
     from zoneinfo import ZoneInfo
-except ImportError:  # pragma: no cover
+    _IST_ZI = ZoneInfo("Asia/Kolkata")
+except Exception:  # pragma: no cover - Python 3.8, or no tzdata (Windows)
     ZoneInfo = None
+    _IST_ZI = None
+
+# A closed pipe (e.g. `| head`) should end the tool quietly, not with a traceback.
+try:
+    import signal as _signal
+    _signal.signal(_signal.SIGPIPE, _signal.SIG_DFL)
+except (ImportError, AttributeError, ValueError):
+    pass
+
+# Claude Code runs tools with stdout as a pipe; on Windows that defaults to the
+# locale codepage and the rupee sign would raise UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
 __version__ = "1.0.0"
 
@@ -42,7 +59,7 @@ __version__ = "1.0.0"
 # time
 # --------------------------------------------------------------------------
 
-IST = ZoneInfo("Asia/Kolkata") if ZoneInfo else _dt.timezone(_dt.timedelta(hours=5, minutes=30), "IST")
+IST = _IST_ZI or _dt.timezone(_dt.timedelta(hours=5, minutes=30), "IST")
 
 PRE_OPEN_START = _dt.time(9, 0)
 PRE_OPEN_END = _dt.time(9, 8)
@@ -127,7 +144,10 @@ def load_holidays():
 
 
 def now_ist(pin=None):
-    """Current IST, or a pinned "YYYY-MM-DD HH:MM" string (IST) for tests and replays."""
+    """Current IST, or a pinned "YYYY-MM-DD HH:MM" string (IST) for tests and replays.
+    $TRADER_NOW pins the clock for every tool at once (rehearsals)."""
+    if not pin and os.environ.get("TRADER_NOW"):
+        pin = os.environ["TRADER_NOW"]
     if pin:
         if isinstance(pin, _dt.datetime):
             return pin if pin.tzinfo else pin.replace(tzinfo=IST)
@@ -286,6 +306,59 @@ def config_path():
     return trader_dir() / "config.json"
 
 
+def holdings_path(cfg=None):
+    """trader/holdings.json next to the other trader files; config holdings_file may override (relative to trader/'s parent)."""
+    cfg = cfg or load_config()
+    hf = cfg.get("holdings_file") or "trader/holdings.json"
+    p = Path(hf)
+    if p.is_absolute():
+        return p
+    if hf == "trader/holdings.json":
+        return trader_dir() / "holdings.json"
+    return trader_dir().parent / p
+
+
+def load_holdings(cfg=None):
+    return read_json(holdings_path(cfg), {"positions": []}) or {"positions": []}
+
+
+def log_path():
+    return trader_dir() / "trades_log.json"
+
+
+def load_log():
+    return read_json(log_path(), {"trades": []}) or {"trades": []}
+
+
+def paper_close(cfg, symbol, price, reason, qty=None):
+    """Close (part of) a PAPER position at `price`: update holdings, book P&L on the BUY row, log the SELL.
+    Used by nse-broker and by the exit watchers when a paper stop or target is hit. Returns the P&L or None."""
+    hold = load_holdings(cfg)
+    pos = next((p for p in hold.get("positions", []) if p["symbol"].upper() == symbol.upper()), None)
+    if not pos or not pos.get("paper", True):
+        return None
+    q = int(qty or pos["qty"])
+    q = min(q, int(pos["qty"]))
+    avg = float(pos.get("avg_price") or price)
+    pnl = round((float(price) - avg) * q, 2)
+    t = now_ist()
+    log = load_log()
+    if q >= int(pos["qty"]):
+        hold["positions"] = [p for p in hold["positions"] if p is not pos]
+        for r in log["trades"]:
+            if r.get("order_id") == pos.get("order_id") and r.get("status") == "open":
+                r.update({"status": "closed", "pnl": pnl, "exit_price": float(price), "exit_time": t.strftime("%H:%M:%S"), "exit_reason": reason})
+    else:
+        pos["qty"] = int(pos["qty"]) - q
+    log["trades"].append({"order_id": "paper-close-%s" % t.strftime("%H%M%S"), "date": t.date().isoformat(), "time": t.strftime("%H:%M:%S"),
+                          "symbol": symbol.upper(), "side": "SELL", "qty": q, "price": float(price), "fill_price": float(price),
+                          "product": pos.get("product", "MIS"), "paper": True, "broker": "paper", "status": "closed", "pnl": pnl,
+                          "closes": pos.get("order_id"), "reason": reason})
+    write_json(log_path(), log)
+    write_json(holdings_path(cfg), hold)
+    return pnl
+
+
 def load_config(path=None, strict=False):
     """trader/config.json merged over the defaults. strict=True raises when it is missing."""
     p = Path(path) if path else config_path()
@@ -413,7 +486,6 @@ def yahoo_symbol(sym, exchange="NSE"):
     s = sym.strip().upper()
     if s.startswith("^") or s.endswith(".NS") or s.endswith(".BO"):
         return s
-    s = s.replace("&", "%26") if False else s
     return s + (".BO" if exchange.upper() == "BSE" else ".NS")
 
 
@@ -784,10 +856,10 @@ def atr(bars, n=14):
 
 def tick_for(price):
     """NSE cash-segment tick size by price band (in force since 2024):
-    <= 250: 0.01; 250-1000: 0.05; 1000-5000: 0.10; 5000-10000: 0.50; 10000-20000: 1.00; above: 5.00.
+    below 250: 0.01; 250-1000: 0.05; 1000-5000: 0.10; 5000-10000: 0.50; 10000-20000: 1.00; above: 5.00.
     When the live quote carries `tickSize`, callers pass that instead."""
     p = float(price)
-    if p <= 250:
+    if p < 250:
         return 0.01
     if p <= 1000:
         return 0.05

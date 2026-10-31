@@ -72,7 +72,8 @@ class ExitRules(unittest.TestCase):
 
 class Budget(unittest.TestCase):
     def cfg(self, **kw):
-        c = json.load(open(os.path.join(ROOT, "nse-budget", "config.example.json")))
+        with open(os.path.join(ROOT, "nse-budget", "config.example.json"), encoding="utf-8") as fh:
+            c = json.load(fh)
         c.update(kw)
         return c
 
@@ -90,12 +91,53 @@ class Budget(unittest.TestCase):
         self.assertEqual(o["decided_by"], "max_loss_per_trade")
         self.assertLessEqual(o["loss_at_stop_inr"], 500)
         self.assertEqual(o["price"], 1000.05)  # Rs 1,000 is still in the <=1000 band: Rs 0.05 tick
-        self.assertEqual(o["bracket"]["stop_limit"], 989.85)
+        self.assertEqual(o["bracket"]["stop_limit"], 986.0)  # max(3 ticks, 0.4%) under the trigger
+        self.assertEqual(o["notional_inr"], o["qty"] * o["price"])  # measured from the limit price
 
     def test_refuses_far_stop(self):
         plan = {"symbol": "DEMO", "entry": 1000, "stop": 900, "target": 1200}
         with self.assertRaises(nc.DataError):
             bud.size_order(plan, self.cfg(max_loss_per_trade_inr=50))
+
+    def test_tight_limits_pass_risk(self):
+        """What budget sizes, risk must pass: both measure from the limit price."""
+        import tempfile, os
+        risk = load("nse-risk", "check.py")
+        plan = {"symbol": "DEMO", "entry": 1000, "stop": 990, "target": 1020}
+        cfg = self.cfg(max_loss_per_trade_inr=1000, budget_inr=100000, max_order_inr=40000, max_position_pct=40)
+        o = bud.size_order(plan, cfg)
+        ctx = {"now": nc.now_ist("2026-11-03 10:20"), "quotes": {}, "universe_tags": {}, "day_realised_loss": 0.0, "day_open_risk": 0.0,
+               "day_trades": 0, "day_orders": 0, "pending_open_risk": 0.0, "pending_trades": 0, "pending_orders": 0,
+               "live_symbols": set(), "results_today": set(), "allow_closed": False, "held": {}}
+        reasons, _ = risk.check_order(o, cfg, ctx)
+        self.assertEqual(reasons, [])
+
+    def test_daily_limit_aggregates_within_a_run(self):
+        risk = load("nse-risk", "check.py")
+        cfg = self.cfg(max_loss_per_trade_inr=2000, max_daily_loss_inr=3000, budget_inr=1000000, max_order_inr=1000000, max_position_pct=100)
+        ctx = {"now": nc.now_ist("2026-11-03 10:20"), "quotes": {}, "universe_tags": {}, "day_realised_loss": 0.0, "day_open_risk": 0.0,
+               "day_trades": 0, "day_orders": 0, "pending_open_risk": 0.0, "pending_trades": 0, "pending_orders": 0,
+               "live_symbols": set(), "results_today": set(), "allow_closed": False, "held": {}}
+        o1 = bud.size_order({"symbol": "AAA", "entry": 1000, "stop": 990, "target": 1020}, dict(cfg, max_loss_per_trade_inr=1700))
+        o2 = dict(o1, symbol="BBB")
+        r1, _ = risk.check_order(o1, cfg, ctx)
+        r2, _ = risk.check_order(o2, cfg, ctx)
+        self.assertEqual(r1, [])
+        self.assertTrue(any("daily limit" in r for r in r2), r2)
+
+    def test_sell_needs_a_position(self):
+        risk = load("nse-risk", "check.py")
+        cfg = self.cfg()
+        base = {"now": nc.now_ist("2026-11-03 10:20"), "quotes": {}, "universe_tags": {}, "day_realised_loss": 0.0, "day_open_risk": 0.0,
+                "day_trades": 0, "day_orders": 0, "pending_open_risk": 0.0, "pending_trades": 0, "pending_orders": 0,
+                "live_symbols": set(), "results_today": set(), "allow_closed": False}
+        sell = {"symbol": "DEMO", "side": "SELL", "qty": 10, "price": 1000, "product": "MIS", "bracket": {}}
+        r, _ = risk.check_order(sell, cfg, dict(base, held={}))
+        self.assertTrue(any("short" in x for x in r), r)
+        r, _ = risk.check_order(sell, cfg, dict(base, held={"DEMO": 5}))
+        self.assertTrue(any("only 5 held" in x for x in r), r)
+        r, _ = risk.check_order(sell, cfg, dict(base, held={"DEMO": 10}))
+        self.assertEqual(r, [])
 
 
 class TimeMachine(unittest.TestCase):

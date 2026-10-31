@@ -7,8 +7,7 @@ income / revenue from operations, profit before tax, net profit, EPS) and
 sums up what changed: each quarter against the previous one and against
 the same quarter a year earlier, margins, and the trailing four quarters.
 Also shows the next board meeting for results and the dividend record
-dates. When NSE will not answer, it falls back to Yahoo's quarterly
-earnings timeline where available, and says so.
+dates. NSE's site rate-limits; when it will not answer the tool says so.
 
 Exit 0 when it read something.
 """
@@ -132,7 +131,9 @@ def analyse(rows, prefer_consolidated=True):
         })
     ttm = None
     if len(table) >= 4 and all(t["net_profit"] is not None for t in table[:4]):
-        ttm = {"revenue": sum(t["revenue"] or 0 for t in table[:4]), "net_profit": sum(t["net_profit"] for t in table[:4])}
+        ds = [dt.date.fromisoformat(t["period"]) for t in table[:4]]
+        if all(60 <= (ds[i] - ds[i + 1]).days <= 125 for i in range(3)):
+            ttm = {"revenue": sum(t["revenue"] or 0 for t in table[:4]), "net_profit": sum(t["net_profit"] for t in table[:4])}
     return table, ttm, ("consolidated" if use is cons else "standalone")
 
 
@@ -183,8 +184,11 @@ def main(argv=None):
             doc = sess.json("/api/corporate-board-meetings?index=equities&symbol=%s" % urllib.parse.quote(sym))
             for r in (doc if isinstance(doc, list) else doc.get("data") or []):
                 desc = str(r.get("bm_desc") or r.get("bm_purpose") or r.get("purpose") or "")
-                if re.search(r"result|financial", desc.lower()):
-                    bms.append({"date": r.get("bm_date") or r.get("meetingdate"), "purpose": desc})
+                d = r.get("bm_date") or r.get("meetingdate") or ""
+                bd = parse_period(str(d))
+                if re.search(r"result|financial", desc.lower()) and bd and bd >= nc.now_ist().date():
+                    bms.append({"date": d, "purpose": desc})
+            bms.sort(key=lambda b: parse_period(str(b["date"])) or dt.date.max)
         except nc.DataError:
             pass
     out = {"symbol": sym, "as_of": nc.now_ist().strftime("%Y-%m-%d %H:%M IST"), "source": source, "basis": basis,

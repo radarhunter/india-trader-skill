@@ -32,7 +32,7 @@ def load_bars(a, sym, day):
         doc = json.loads(Path(a.offline).read_text(encoding="utf-8"))
         ch = nc.parse_chart(doc, sym)
     else:
-        ch = nc.yahoo_chart(sym, "1d", a.interval)
+        ch = nc.yahoo_chart(sym, "1d", a.interval, exchange=a.exchange)
     return nc.session_bars(nc.clean_bars(ch), day), ch["meta"]
 
 
@@ -106,6 +106,9 @@ def main(argv=None):
     no_before = nc.parse_hhmm(cfg.get("no_entries_before"), dt.time(9, 30))
     no_after = nc.parse_hhmm(cfg.get("no_entries_after"), dt.time(14, 45))
     interval_sec = 60 if a.interval == "1m" else 300
+    if a.setup == "level" and not a.level:
+        print("--setup level needs --level PRICE")
+        return 1
     level = a.level if a.setup == "level" or a.level else None
     while True:
         t = nc.now_ist(a.now)

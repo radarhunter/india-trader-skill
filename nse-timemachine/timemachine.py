@@ -125,7 +125,7 @@ def replay_history(bars, or_minutes, stop_rule, r_mult, flat_by, no_after, entry
         if entry is None:
             rows.append({"day": day, "fired": False})
             continue
-        stop = (hi + lo) / 2 if stop_rule == "or-mid" else lo
+        stop = (hi + lo) / 2 if "mid" in str(stop_rule).lower() else lo
         risk = entry - stop
         if risk <= 0:
             rows.append({"day": day, "fired": False})
@@ -269,8 +269,9 @@ def main(argv=None):
                 slots.setdefault(k, []).append(((b[2] - b[1]) / b[1], (b[3] - b[1]) / b[1], (b[4] - b[1]) / b[1]))
         tod = [slots.get(k, []) for k in range(n_bars)]
         sim = simulate(entry, stop, target, n_bars, shapes, a.runs, a.seed, tod)
-        hist = replay_history(bars, a.or_minutes, plan.get("stop_rule", "or-mid") if "low" not in str(plan.get("stop_rule", "")) else "or-low",
-                              r_mult, flat_by, no_after, entry_day=today)
+        rule = str(plan.get("stop_rule") or "or-mid").lower()
+        hist_rule = "or-low" if "low" in rule else "or-mid"  # percent / ATR / price stops replay with the range midpoint
+        hist = replay_history(bars, a.or_minutes, hist_rule, r_mult, flat_by, no_after, entry_day=today)
         horizon = "%s to %s IST (%d bars)" % (entry_t.strftime("%H:%M"), flat_by.strftime("%H:%M"), n_bars)
         sessions = len(nc.bars_by_day(sess))
     fired = [h for h in hist if h.get("fired")]

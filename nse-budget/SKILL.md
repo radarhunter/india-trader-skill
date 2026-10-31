@@ -99,8 +99,9 @@ or a paper fill.
 
 ## Indian-market notes
 
-- **Leverage.** Brokers offer up to 5x intraday margin on MIS (SEBI peak
-  margin: 20% of VAR+ELM). The pack sizes from the *cash* budget, not the
+- **Leverage.** Brokers offer up to about 5x intraday margin on MIS (SEBI
+  peak-margin rules require VAR+ELM, with a floor of 20% of the trade
+  value, to be collected upfront). The pack sizes from the *cash* budget, not the
   leveraged buying power, because the loss is paid in cash. `allow_margin`
   in config stays false by default and /nse-risk blocks a notional above
   the budget.

@@ -63,10 +63,14 @@ def round_trip_charges(qty, buy_px, sell_px, product, cfg):
 
 
 def size_order(plan, cfg, cash_available=None):
-    entry, stop, target = float(plan["entry"]), float(plan["stop"]), float(plan["target"])
-    risk = entry - stop
-    if risk <= 0:
+    plan_entry, stop, target = float(plan["entry"]), float(plan["stop"]), float(plan["target"])
+    if plan_entry <= stop:
         raise nc.DataError("the plan's stop is not below the entry")
+    tick = plan.get("tick") or nc.tick_for(plan_entry)
+    # the order is a limit one tick above the plan entry; every limit and the loss are measured from THAT price,
+    # which is what nse-risk checks
+    entry = nc.tick_round(plan_entry + tick, down=False, tick=tick)
+    risk = entry - stop
     product = plan.get("product") or cfg.get("product", "MIS")
     budget = float(cfg["budget_inr"])
     cash = float(cash_available) if cash_available is not None else budget
@@ -101,15 +105,15 @@ def size_order(plan, cfg, cash_available=None):
     ch_target = round_trip_charges(qty, entry, target, product, cfg)
     loss_at_stop = qty * risk + ch_stop["total"]
     gain_at_target = qty * (target - entry) - ch_target["total"]
-    tick = plan.get("tick") or nc.tick_for(entry)
-    limit_px = nc.tick_round(entry + tick, down=False, tick=tick)
+    limit_px = entry
     sl_trigger = stop
-    sl_limit = nc.tick_round(stop - 3 * tick, down=True, tick=tick)
+    # SL limit: far enough under the trigger to fill in a fast move (at least 3 ticks and at least 0.4% of price)
+    sl_limit = nc.tick_round(min(stop - 3 * tick, stop * (1 - 0.004)), down=True, tick=tick)
     order = {
         "symbol": plan["symbol"], "exchange": cfg.get("exchange", "NSE"), "side": "BUY", "product": product,
         "qty": qty, "order_type": "LIMIT", "price": limit_px,
         "bracket": {"stop_trigger": sl_trigger, "stop_limit": sl_limit, "target": target},
-        "horizon": plan.get("horizon", "intraday"), "flat_by": plan.get("flat_by"),
+        "horizon": plan.get("horizon", "intraday"), "flat_by": plan.get("flat_by"), "plan_entry": plan_entry,
         "notional_inr": round(notional, 2), "risk_per_share": round(risk, 2),
         "loss_at_stop_inr": round(loss_at_stop, 2), "gain_at_target_inr": round(gain_at_target, 2),
         "charges_at_stop": ch_stop, "charges_at_target": ch_target,
@@ -138,8 +142,8 @@ def cmd_size(a):
     if a.json:
         print(json.dumps(doc, indent=2))
     else:
-        print("%s: %d shares at a %s limit (entry %.2f + 1 tick). Decided by %s." % (
-            order["symbol"], order["qty"], nc.inr(order["price"]), plan["entry"], order["decided_by"].replace("_", " ")))
+        print("%s: %d shares at a %s limit (plan entry %.2f + 1 tick; limits measured from the limit price). Decided by %s." % (
+            order["symbol"], order["qty"], nc.inr(order["price"]), order["plan_entry"], order["decided_by"].replace("_", " ")))
         print("  Limits: max loss %d, position cap %d, max order %d, cash after buffer %d shares." % (
             order["limits"]["max_loss_per_trade"], order["limits"]["position_cap"], order["limits"]["max_order"], order["limits"]["cash_after_buffer"]))
         print("  Notional %s. Loss at the stop %s (incl. charges %s). Gain at the target %s (after charges %s). R after charges %.2f." % (

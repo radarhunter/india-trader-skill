@@ -50,9 +50,10 @@ broadcast time, a link to the XBRL); the tool opens each filing's XBRL and
 reads the SEBI PIT schema tags into `name`, `category` (Promoter, Promoter
 Group, Director, KMP...), `type` (Buy / Sell / Pledge / Revoke...), `mode`
 (Market Sale, Market Purchase, Off Market, ESOP, Gift, Inter-se...), `qty`,
-`value_inr`, pre and post holding %, `trade_date`, `disclosed`,
-`days_to_disclose`, and `mine` when the symbol is in your holdings or
-watchlist. One request per filing, so `--max-xml 60` caps how many are
+`value_inr`, pre and post holding %, `trade_date`, `disclosed` (the
+exchange broadcast date), `days_to_disclose` (trade date to exchange
+broadcast - the insider's two days plus the company's two), and `mine` when
+the symbol is in your holdings or watchlist. One request per filing, so `--max-xml 60` caps how many are
 opened (use `--mine` or `--symbol` to spend them where it matters). Shown
 newest first; `trader/insider_seen.json` keeps what was already shown so
 `watch` rings only on a new filing.

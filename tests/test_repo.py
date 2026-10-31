@@ -7,7 +7,8 @@ ORDER_PATH = ["nse-scanner", "nse-entry", "nse-exit", "nse-timemachine", "nse-bu
 
 
 def frontmatter(path):
-    text = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
     m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
     return (m.group(1) if m else ""), text
 
@@ -35,10 +36,12 @@ class Repo(unittest.TestCase):
             self.assertIn("sebi", low, s)
 
     def test_plugin_manifest(self):
-        doc = json.load(open(os.path.join(ROOT, ".claude-plugin", "plugin.json")))
+        with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as fh:
+            doc = json.load(fh)
         self.assertEqual(doc["name"], "india-trader-skill")
         self.assertEqual(doc["skills"], "./")
-        mk = json.load(open(os.path.join(ROOT, ".claude-plugin", "marketplace.json")))
+        with open(os.path.join(ROOT, ".claude-plugin", "marketplace.json"), encoding="utf-8") as fh:
+            mk = json.load(fh)
         self.assertEqual(mk["plugins"][0]["source"], "./")
 
     def test_no_secrets_in_tree(self):
@@ -47,7 +50,8 @@ class Repo(unittest.TestCase):
             dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
             for f in files:
                 if f.endswith((".py", ".md", ".json")):
-                    self.assertIsNone(rx.search(open(os.path.join(base, f), encoding="utf-8", errors="ignore").read()), f)
+                    with open(os.path.join(base, f), encoding="utf-8", errors="ignore") as fh:
+                        self.assertIsNone(rx.search(fh.read()), f)
 
 
 if __name__ == "__main__":

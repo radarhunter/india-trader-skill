@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import sys
 import time
 import uuid
@@ -78,7 +79,7 @@ def cmd_plan(a):
 
 def cmd_holdings(a):
     cfg = nc.load_config()
-    hold = nc.read_json(cfg.get("holdings_file", "trader/holdings.json"), {}) or {}
+    hold = nc.load_holdings(cfg)
     pos = hold.get("positions") or []
     if not pos:
         print("No positions in %s." % cfg.get("holdings_file"))
@@ -112,6 +113,9 @@ def cmd_add(a):
     if what[0].lower() == "bell":
         doc["alerts"].append(new_alert("time", None, "09:15", "opening bell"))
     elif what[0].lower() == "time":
+        if len(what) < 2 or not re.fullmatch(r"\d{1,2}:\d{2}", what[1]):
+            print("add time HH:MM [label]")
+            return 1
         doc["alerts"].append(new_alert("time", None, what[1], " ".join(what[2:]) or "time"))
     elif len(what) >= 3 and what[1].lower() in ("above", "below"):
         doc["alerts"].append(new_alert(what[1].lower(), what[0].upper(), float(what[2]), " ".join(what[3:]) or what[1].lower()))
@@ -197,6 +201,10 @@ def cmd_watch(a):
     while True:
         now = nc.now_ist(a.now)
         doc = load_alerts()
+        today = now.date().isoformat()
+        for x in doc["alerts"]:  # time alerts re-arm each trading day
+            if x["kind"] == "time" and x.get("fired") and not str(x["fired"]).startswith(today):
+                x["fired"] = None
         armed = [x for x in doc["alerts"] if not x.get("fired")]
         if not armed:
             print("No armed alerts. Add some, or run `plan` / `holdings`.")
@@ -213,6 +221,10 @@ def cmd_watch(a):
                 print("ALERT %s  %s" % (now.strftime("%H:%M:%S"), msg), flush=True)
                 if cfg.get("notify", True):
                     nc.notify("nse-alerts", msg)
+                if x.get("symbol") and x.get("label") in ("stop", "target"):  # a paper position: book it
+                    pnl = nc.paper_close(cfg, x["symbol"], float(x["level"]), "paper %s hit" % x["label"])
+                    if pnl is not None:
+                        print("  PAPER %s booked for %s at %s: P&L %s" % (x["label"], x["symbol"], nc.inr(x["level"]), nc.inr(pnl)))
         if fired_any:
             save_alerts(doc)
         if not a.quiet:

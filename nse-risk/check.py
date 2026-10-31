@@ -25,7 +25,6 @@ import datetime as dt
 import hashlib
 import json
 import sys
-import urllib.parse
 from pathlib import Path
 
 _here = Path(__file__).resolve().parent
@@ -69,12 +68,8 @@ def fresh_quote(sym, sess, a):
     return q
 
 
-def log_path():
-    return nc.trader_dir() / "trades_log.json"
-
-
 def todays_log(today):
-    doc = nc.read_json(log_path(), {}) or {}
+    doc = nc.load_log()
     rows = [r for r in (doc.get("trades") or []) if str(r.get("date")) == today]
     return rows
 
@@ -83,13 +78,31 @@ def check_order(o, cfg, ctx):
     reasons, warns = [], []
     side = (o.get("side") or "").upper()
     sym = (o.get("symbol") or "").upper()
-    qty = int(o.get("qty") or 0)
-    price = float(o.get("price") or 0)
+    try:
+        qty = int(float(o.get("qty") or 0))
+        price = float(o.get("price") or 0)
+    except (TypeError, ValueError):
+        reasons.append("malformed order: qty and price must be numbers")
+        return reasons, warns
     product = (o.get("product") or cfg.get("product", "MIS")).upper()
     br = o.get("bracket") or {}
-    closing = side == "SELL"
     if not sym or qty <= 0 or price <= 0:
         reasons.append("malformed order: symbol, qty and price are required")
+        return reasons, warns
+    closing = False
+    if side == "SELL":
+        held = ctx["held"].get(sym, 0)
+        if held <= 0:
+            if not cfg.get("allow_short"):
+                reasons.append("SELL %s but no position is held: that is a short sale (allow_short is off)" % sym)
+                return reasons, warns
+        else:
+            closing = True
+            if qty > held:
+                reasons.append("SELL %d x %s but only %d held; a close cannot exceed the position" % (qty, sym, held))
+                return reasons, warns
+    elif side != "BUY":
+        reasons.append("side must be BUY or SELL")
         return reasons, warns
     if sym in [s.upper() for s in cfg.get("blocked", [])]:
         reasons.append("%s is on your blocked list" % sym)
@@ -97,9 +110,6 @@ def check_order(o, cfg, ctx):
         reasons.append("BSE orders are off (allow_bse)")
     if o.get("instrument", "EQ").upper() in ("FUT", "OPT", "CE", "PE") and not cfg.get("allow_fno"):
         reasons.append("F&O is off (allow_fno)")
-    if closing and not o.get("closes_position", True):
-        if not cfg.get("allow_short"):
-            reasons.append("a short sale is off (allow_short)")
     q = ctx["quotes"].get(sym) or {}
     if q.get("surveillance") and cfg.get("avoid_asm_gsm", True) and not closing:
         reasons.append("%s is under surveillance (%s)" % (sym, q["surveillance"]))
@@ -146,11 +156,11 @@ def check_order(o, cfg, ctx):
                 rr = (target - ref) / risk_share if risk_share > 0 else 0
                 if rr < float(cfg.get("min_reward_risk", 1.0)) - 1e-9:
                     reasons.append("reward:risk %.2f from the fresh price is under your minimum %.2f" % (rr, cfg.get("min_reward_risk", 1.0)))
-            # daily limit: realised losses today + open risk + this order
-            day_loss = ctx["day_realised_loss"] + ctx["day_open_risk"]
+            # daily limit: realised losses today + open risk + orders already passed in this run + this order
+            day_loss = ctx["day_realised_loss"] + ctx["day_open_risk"] + ctx["pending_open_risk"]
             if day_loss + loss > float(cfg["max_daily_loss_inr"]) + 1e-6:
                 reasons.append("today's loss %s + open risk %s + this trade's %s would pass the daily limit %s" % (
-                    nc.inr(ctx["day_realised_loss"]), nc.inr(ctx["day_open_risk"]), nc.inr(loss), nc.inr(cfg["max_daily_loss_inr"])))
+                    nc.inr(ctx["day_realised_loss"]), nc.inr(ctx["day_open_risk"] + ctx["pending_open_risk"]), nc.inr(loss), nc.inr(cfg["max_daily_loss_inr"])))
             ctx["pending_open_risk"] += loss
         if ctx["day_realised_loss"] >= float(cfg["max_daily_loss_inr"]) - 1e-6:
             reasons.append("the daily loss limit %s is already reached; no new entries today" % nc.inr(cfg["max_daily_loss_inr"]))
@@ -166,7 +176,10 @@ def check_order(o, cfg, ctx):
                 reasons.append("outside the entry window %s-%s IST (now %s)" % (nb.strftime("%H:%M"), na.strftime("%H:%M"), t.strftime("%H:%M")))
         ms = nc.market_status(t)
         if not ms["is_open"] and not ctx["allow_closed"]:
-            reasons.append("market is not open (%s); next open %s" % (ms["phase"], ms["next_open_ist"]))
+            if product == "CNC" and o.get("horizon") == "swing":
+                warns.append("market is not open (%s); a CNC order placed now goes as an after-market order for the %s open" % (ms["phase"], ms["next_open_ist"]))
+            else:
+                reasons.append("market is not open (%s); next open %s" % (ms["phase"], ms["next_open_ist"]))
         # circuit
         if q.get("upper_cp") and q.get("last"):
             dist = (float(q["upper_cp"]) - float(q["last"])) / float(q["last"]) * 100
@@ -213,10 +226,11 @@ def main(argv=None):
     realised = sum(-float(r.get("pnl") or 0) for r in log if r.get("status") == "closed" and r.get("side") == "SELL" and float(r.get("pnl") or 0) < 0)
     open_risk = sum(float(r.get("loss_at_stop_inr", 0)) for r in log if r.get("status") == "open")
     live_syms = {r["symbol"].upper() for r in log if r.get("status") in ("open", "placed")}
-    holdings = nc.read_json(cfg.get("holdings_file", "trader/holdings.json"), {}) or {}
+    holdings = nc.load_holdings(cfg)
+    held = {}
     for p in holdings.get("positions") or []:
-        if (p.get("product") or "CNC").upper() == "MIS":
-            live_syms.add(p["symbol"].upper())
+        held[p["symbol"].upper()] = held.get(p["symbol"].upper(), 0) + int(p.get("qty") or 0)
+        live_syms.add(p["symbol"].upper())
     news = nc.read_json(nc.trader_dir() / "news.json", {}) or {}
     results_today = set()
     for e in news.get("report") or []:
@@ -239,7 +253,7 @@ def main(argv=None):
     ctx = {"now": t, "quotes": quotes, "universe_tags": tags, "day_realised_loss": realised, "day_open_risk": open_risk,
            "day_trades": sum(1 for r in log if r.get("side") == "BUY"), "day_orders": len(log),
            "pending_open_risk": 0.0, "pending_trades": 0, "pending_orders": 0, "live_symbols": live_syms,
-           "results_today": results_today, "allow_closed": a.allow_closed}
+           "results_today": results_today, "allow_closed": a.allow_closed, "held": held}
     verdicts = []
     all_pass = True
     for o in orders:

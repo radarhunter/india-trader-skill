@@ -1,7 +1,7 @@
 ---
 name: nse-news
 description: >-
-  News Monitor for NSE and BSE stocks. Tracks breaking news on every stock
+  News Monitor for NSE-listed stocks. Tracks breaking news on every stock
   you watch and flags what moves it: Yahoo Finance headlines per symbol,
   every company's corporate announcements filed with NSE under SEBI LODR
   (quarterly results, board meetings, order wins, acquisitions, QIPs,
@@ -91,8 +91,9 @@ RBI policy, Budget, tariffs), `other`.
 - Results season: the 45 days after each quarter end (mid-May, mid-August,
   mid-November, mid-February). Most Nifty 500 companies announce after 15:30
   or on a weekend; the price reacts at the next open.
-- A company must file material events with the exchange within 24 hours
-  (SEBI LODR Reg. 30), often minutes after the event. The NSE announcement
-  therefore usually beats the headline.
+- SEBI LODR Reg. 30 (as amended 2023) requires material events to be filed
+  within 30 minutes of the board meeting's close for decisions taken there,
+  12 hours for events originating inside the company, and 24 hours for
+  others. The NSE announcement therefore usually beats the headline.
 - Promoter pledge creation or invocation and ASM/GSM moves are the two
   filings most likely to hit an intraday long. The tool tags both.

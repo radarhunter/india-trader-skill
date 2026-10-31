@@ -23,7 +23,6 @@ import datetime as dt
 import json
 import sys
 import time
-import urllib.parse
 from pathlib import Path
 
 _here = Path(__file__).resolve().parent
@@ -309,7 +308,7 @@ def cmd_tomorrow(a):
     swing = pick("swing_score")
     intraday = [r for r in pick("intraday_score", 8) if r["symbol"] not in {x["symbol"] for x in swing}][:5]
     # exits
-    hold = nc.read_json(cfg.get("holdings_file", "trader/holdings.json"), {}) or {}
+    hold = nc.load_holdings(cfg)
     exits = []
     for p in hold.get("positions") or []:
         s = p["symbol"].upper()
@@ -397,7 +396,7 @@ def cmd_tomorrow(a):
 
 def cmd_exits(a):
     cfg = nc.load_config()
-    hold = nc.read_json(cfg.get("holdings_file", "trader/holdings.json"), {}) or {}
+    hold = nc.load_holdings(cfg)
     pos = hold.get("positions") or []
     if not pos:
         print("No holdings in %s. Add positions there (symbol, qty, avg_price, stop, target, product) or let /nse-broker fill one." % cfg.get("holdings_file"))
@@ -460,6 +459,12 @@ def cmd_exits(a):
                 fired_ids.add(key)
                 if cfg.get("notify", True):
                     nc.notify("nse-picks exit", "%s: %s" % (r["symbol"], r["why"][0]))
+                if r["why"][0].startswith(("STOP", "TARGET")):  # a paper position: book it at the level
+                    level = r["stop"] if r["why"][0].startswith("STOP") else r["target"]
+                    pnl = nc.paper_close(cfg, r["symbol"], float(level), "paper " + r["why"][0].split(":")[0].lower())
+                    if pnl is not None:
+                        print("  PAPER position in %s booked at %s: P&L %s" % (r["symbol"], nc.inr(level), nc.inr(pnl)))
+                        pos[:] = list(nc.load_holdings(cfg).get("positions") or [])
         if not a.watch or a.now:
             return 0 if urgent else 1
         if t.time() >= dt.time(15, 35) or not nc.is_trading_day(t.date()):

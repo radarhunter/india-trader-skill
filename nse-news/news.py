@@ -67,9 +67,11 @@ def load_seen():
     return set((nc.read_json(seen_path(), {}) or {}).get("ids", []))
 
 
-def save_seen(ids):
-    ids = sorted(ids)[-5000:]
-    nc.write_json(seen_path(), {"ids": ids, "updated": nc.now_ist().strftime("%Y-%m-%d %H:%M IST")})
+def save_seen(new_ids):
+    old = (nc.read_json(seen_path(), {}) or {}).get("ids", [])
+    seen = set(old)
+    nc.write_json(seen_path(), {"ids": (old + [i for i in new_ids if i not in seen])[-5000:],
+                                "updated": nc.now_ist().strftime("%Y-%m-%d %H:%M IST")})
 
 
 # --------------------------------------------------------------------------
@@ -190,7 +192,7 @@ def load_symbols(a):
     wl = nc.read_json(a.watchlist or (nc.trader_dir() / "watchlist.json"), None)
     if wl and wl.get("hits"):
         return [h["symbol"] for h in wl["hits"]][: a.limit or None]
-    hold = nc.read_json(nc.load_config().get("holdings_file", "trader/holdings.json"), None)
+    hold = nc.load_holdings()
     if hold and hold.get("positions"):
         return [p["symbol"].upper() for p in hold["positions"]]
     raise nc.DataError("no symbols: pass --symbols or run /nse-scanner first")
@@ -269,7 +271,7 @@ def main(argv=None):
         report.append(entry)
         time.sleep(a.pause)
     if not a.all:
-        save_seen(seen | new_ids)
+        save_seen(sorted(new_ids))
     total = sum(len(e["items"]) for e in report)
     doc = {"as_of": now.strftime("%Y-%m-%d %H:%M IST"), "symbols": syms, "new_items": total, "report": report}
     nc.write_json(nc.ensure_trader_dir() / "news.json", doc)
