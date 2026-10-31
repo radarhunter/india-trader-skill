@@ -1,0 +1,28 @@
+{
+  "name": "india-trader-skill",
+  "description": "12 Claude skills for trading NSE and BSE stocks: scan the Nifty 500 and F&O for setups, track NSE filings and news, time every entry and exit in IST, replay 10,000 sessions before you risk a rupee, size in rupees with Indian charges, a risk gate built on NSE's own circuit and surveillance data, paper-first execution for Angel One, Upstox and Groww, price and exit alerts, a results analyst, an insider and bulk-deal tracker, and a nightly shortlist of five swing and five intraday names with the exit list.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Arvind Sehdev",
+    "url": "https://github.com/arvindsehdev"
+  },
+  "homepage": "https://github.com/arvindsehdev/india-trader-skill",
+  "repository": "https://github.com/arvindsehdev/india-trader-skill",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "claude-skills",
+    "nse",
+    "bse",
+    "indian-stock-market",
+    "nifty",
+    "day-trading",
+    "swing-trading",
+    "backtesting",
+    "paper-trading",
+    "angel-one",
+    "upstox",
+    "groww"
+  ],
+  "skills": "./"
+}

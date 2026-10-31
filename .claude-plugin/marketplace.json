@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "india-trader-skill",
+  "description": "The India Trader skill pack for Claude: NSE and BSE, paper first",
+  "owner": {
+    "name": "Arvind Sehdev",
+    "url": "https://github.com/arvindsehdev"
+  },
+  "plugins": [
+    {
+      "name": "india-trader-skill",
+      "description": "Twelve Claude skills for the Indian stock market: a chart scanner for the Nifty 500 and F&O, a news and NSE-filings monitor, an entry timer, an exit planner, a time machine that replays 10,000 sessions, a budget manager in rupees with STT and charges, a risk gate on NSE circuit and ASM/GSM data, an order executor (paper by default; Angel One, Upstox, Groww; never without your yes), price and exit alerts, a results analyst, an insider and bulk-deal tracker, and a nightly shortlist of five swing and five intraday names with the exit list.",
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/arvindsehdev/india-trader-skill"
+    }
+  ]
+}

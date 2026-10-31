@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+trader/
+livetest/
+livetest.log
+.DS_Store
+*.tar.gz
